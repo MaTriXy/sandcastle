@@ -79,7 +79,9 @@ const makeTestSandboxFactory = (
   const factoryLayer = Layer.succeed(SandboxFactory, {
     skipSync: false,
     withSandbox: <A, E, R>(
-      effect: Effect.Effect<A, E, R | Sandbox>,
+      makeEffect: (
+        info: import("./SandboxFactory.js").SandboxInfo,
+      ) => Effect.Effect<A, E, R | Sandbox>,
     ): Effect.Effect<A, E | DockerError, Exclude<R, Sandbox>> =>
       Effect.acquireUseRelease(
         // Acquire: create fresh sandbox dir (removing any previous state)
@@ -90,7 +92,7 @@ const makeTestSandboxFactory = (
         }),
         // Use: provide sandbox layer and run effect
         (dir) =>
-          effect.pipe(Effect.provide(buildLayer(dir))) as Effect.Effect<
+          makeEffect({}).pipe(Effect.provide(buildLayer(dir))) as Effect.Effect<
             A,
             E | DockerError,
             Exclude<R, Sandbox>

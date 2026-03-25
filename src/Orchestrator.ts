@@ -162,56 +162,58 @@ export const orchestrate = (
       yield* display.status(`Iteration ${i}/${iterations} (max)`, "info");
 
       const lifecycleResult = yield* factory.withSandbox(
-        withSandboxLifecycle(
-          {
-            hostRepoDir,
-            sandboxRepoDir,
-            hooks: config?.hooks,
-            branch,
-            skipSync: factory.skipSync,
-          },
-          (ctx) =>
-            Effect.gen(function* () {
-              // Preprocess prompt (run !`command` expressions inside sandbox)
-              const fullPrompt = yield* preprocessPrompt(
-                prompt,
-                ctx.sandbox,
-                ctx.sandboxRepoDir,
-              );
+        ({ hostWorktreePath }) =>
+          withSandboxLifecycle(
+            {
+              hostRepoDir,
+              sandboxRepoDir,
+              hooks: config?.hooks,
+              branch,
+              skipSync: factory.skipSync,
+              hostWorktreePath,
+            },
+            (ctx) =>
+              Effect.gen(function* () {
+                // Preprocess prompt (run !`command` expressions inside sandbox)
+                const fullPrompt = yield* preprocessPrompt(
+                  prompt,
+                  ctx.sandbox,
+                  ctx.sandboxRepoDir,
+                );
 
-              yield* display.status("Agent started", "success");
+                yield* display.status("Agent started", "success");
 
-              // Invoke the agent
-              const onText = (text: string) =>
-                Effect.runSync(display.text(text));
-              const { result: agentOutput, usage } = yield* invokeAgent(
-                ctx.sandbox,
-                ctx.sandboxRepoDir,
-                fullPrompt,
-                resolvedModel,
-                onText,
-              );
+                // Invoke the agent
+                const onText = (text: string) =>
+                  Effect.runSync(display.text(text));
+                const { result: agentOutput, usage } = yield* invokeAgent(
+                  ctx.sandbox,
+                  ctx.sandboxRepoDir,
+                  fullPrompt,
+                  resolvedModel,
+                  onText,
+                );
 
-              yield* display.status("Agent stopped", "info");
+                yield* display.status("Agent stopped", "info");
 
-              // Log usage summary
-              if (usage) {
-                yield* display.summary("Token Usage", formatUsageRows(usage));
-              }
+                // Log usage summary
+                if (usage) {
+                  yield* display.summary("Token Usage", formatUsageRows(usage));
+                }
 
-              // Check completion signal
-              if (agentOutput.includes(completionSignal)) {
+                // Check completion signal
+                if (agentOutput.includes(completionSignal)) {
+                  return {
+                    wasCompletionSignalDetected: true,
+                    stdout: agentOutput,
+                  } as const;
+                }
                 return {
-                  wasCompletionSignalDetected: true,
+                  wasCompletionSignalDetected: false,
                   stdout: agentOutput,
                 } as const;
-              }
-              return {
-                wasCompletionSignalDetected: false,
-                stdout: agentOutput,
-              } as const;
-            }),
-        ),
+              }),
+          ),
       );
 
       allCommits.push(...lifecycleResult.commits);

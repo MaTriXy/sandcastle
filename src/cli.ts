@@ -341,9 +341,9 @@ const interactiveSession = (options: {
     const factory = yield* SandboxFactory;
     const d = yield* Display;
 
-    yield* factory.withSandbox(
+    yield* factory.withSandbox(({ hostWorktreePath }) =>
       withSandboxLifecycle(
-        { hostRepoDir, sandboxRepoDir, hooks: config?.hooks },
+        { hostRepoDir, sandboxRepoDir, hooks: config?.hooks, hostWorktreePath },
         (ctx) =>
           Effect.gen(function* () {
             // Get container ID for docker exec -it

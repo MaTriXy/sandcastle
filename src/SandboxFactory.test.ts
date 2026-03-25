@@ -83,7 +83,7 @@ describe("WorktreeDockerSandboxFactory", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const factory = yield* SandboxFactory;
-        yield* factory.withSandbox(Effect.void);
+        yield* factory.withSandbox(() => Effect.void);
       }).pipe(Effect.provide(layerWithBranch)),
     );
 
@@ -96,7 +96,7 @@ describe("WorktreeDockerSandboxFactory", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const factory = yield* SandboxFactory;
-        yield* factory.withSandbox(Effect.void);
+        yield* factory.withSandbox(() => Effect.void);
       }).pipe(Effect.provide(makeLayer())),
     );
 
@@ -107,7 +107,7 @@ describe("WorktreeDockerSandboxFactory", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const factory = yield* SandboxFactory;
-        yield* factory.withSandbox(Effect.void);
+        yield* factory.withSandbox(() => Effect.void);
       }).pipe(Effect.provide(makeLayer())),
     );
 
@@ -125,7 +125,7 @@ describe("WorktreeDockerSandboxFactory", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const factory = yield* SandboxFactory;
-        yield* factory.withSandbox(Effect.void);
+        yield* factory.withSandbox(() => Effect.void);
       }).pipe(Effect.provide(makeLayer())),
     );
 
@@ -139,7 +139,7 @@ describe("WorktreeDockerSandboxFactory", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const factory = yield* SandboxFactory;
-        yield* factory.withSandbox(Effect.void);
+        yield* factory.withSandbox(() => Effect.void);
       }).pipe(Effect.provide(makeLayer())),
     );
 
@@ -153,7 +153,7 @@ describe("WorktreeDockerSandboxFactory", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const factory = yield* SandboxFactory;
-        yield* factory.withSandbox(Effect.void);
+        yield* factory.withSandbox(() => Effect.void);
       }).pipe(Effect.provide(makeLayer())),
     );
 
@@ -173,7 +173,7 @@ describe("WorktreeDockerSandboxFactory", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const factory = yield* SandboxFactory;
-        yield* factory.withSandbox(Effect.void);
+        yield* factory.withSandbox(() => Effect.void);
       }).pipe(Effect.provide(makeLayer())),
     );
 
@@ -189,7 +189,7 @@ describe("WorktreeDockerSandboxFactory", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const factory = yield* SandboxFactory;
-        yield* factory.withSandbox(Effect.void);
+        yield* factory.withSandbox(() => Effect.void);
       }).pipe(Effect.provide(makeLayer())),
     );
 
@@ -201,7 +201,7 @@ describe("WorktreeDockerSandboxFactory", () => {
       Effect.runPromise(
         Effect.gen(function* () {
           const factory = yield* SandboxFactory;
-          yield* factory.withSandbox(Effect.die("boom"));
+          yield* factory.withSandbox(() => Effect.die("boom"));
         }).pipe(Effect.provide(makeLayer())),
       ),
     ).rejects.toThrow();
@@ -228,7 +228,7 @@ describe("DockerSandboxFactory (isolated mode)", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const factory = yield* SandboxFactory;
-        yield* factory.withSandbox(Effect.void);
+        yield* factory.withSandbox(() => Effect.void);
       }).pipe(Effect.provide(makeLayer())),
     );
 

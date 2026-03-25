@@ -7,8 +7,42 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { type DisplayEntry, SilentDisplay } from "./Display.js";
 import { FilesystemSandbox } from "./FilesystemSandbox.js";
+import { Sandbox, type SandboxService } from "./Sandbox.js";
 import { ExecError } from "./errors.js";
 import { withSandboxLifecycle } from "./SandboxLifecycle.js";
+
+/**
+ * Creates a sandbox that translates container paths to host paths,
+ * simulating Docker's bind mount behavior. When a command uses
+ * `containerPath` as cwd, it's translated to `hostPath`.
+ */
+const makePathTranslatingSandbox = (
+  hostPath: string,
+  containerPath: string,
+  _baseLayer: Layer.Layer<Sandbox>,
+): SandboxService => {
+  const translateCwd = (cwd?: string) =>
+    cwd === containerPath ? hostPath : cwd;
+
+  const baseSandbox = Effect.runSync(
+    Effect.provide(Sandbox, FilesystemSandbox.layer(hostPath)),
+  );
+
+  return {
+    exec: (command, options) =>
+      baseSandbox.exec(command, {
+        ...options,
+        cwd: translateCwd(options?.cwd),
+      }),
+    execStreaming: (command, onStdoutLine, options) =>
+      baseSandbox.execStreaming(command, onStdoutLine, {
+        ...options,
+        cwd: translateCwd(options?.cwd),
+      }),
+    copyIn: (hp, sp) => baseSandbox.copyIn(hp, sp),
+    copyOut: (sp, hp) => baseSandbox.copyOut(sp, hp),
+  };
+};
 
 const execAsync = promisify(exec);
 
@@ -541,6 +575,61 @@ describe("withSandboxLifecycle (worktree mode — skipSync: true)", () => {
       cwd: hostDir,
     });
     expect(stdout.trim()).toBeTruthy();
+  });
+
+  it("cherry-pick works when sandboxRepoDir differs from host worktree path", async () => {
+    const { hostDir, worktreeDir, layer } = await setupWorktree();
+
+    // Simulate Docker: sandboxRepoDir is the container mount point, which differs
+    // from the actual host worktree path. In production the container sees
+    // /home/agent/workspace while the host sees .sandcastle/worktrees/<name>.
+    //
+    // We use a PathTranslating sandbox that maps the container path to the real
+    // worktree path — exactly what Docker's bind mount does.
+    const containerPath = "/home/agent/workspace";
+    const translatingLayer = Layer.succeed(
+      Sandbox,
+      makePathTranslatingSandbox(worktreeDir, containerPath, layer),
+    );
+
+    const result = await Effect.runPromise(
+      withSandboxLifecycle(
+        {
+          hostRepoDir: hostDir,
+          sandboxRepoDir: containerPath,
+          skipSync: true,
+          hostWorktreePath: worktreeDir,
+        },
+        (ctx) =>
+          Effect.gen(function* () {
+            yield* ctx.sandbox.exec('git config user.email "test@test.com"', {
+              cwd: ctx.sandboxRepoDir,
+            });
+            yield* ctx.sandbox.exec('git config user.name "Test"', {
+              cwd: ctx.sandboxRepoDir,
+            });
+            yield* ctx.sandbox.exec(
+              'sh -c "echo docker-content > docker-file.txt && git add docker-file.txt && git commit -m \\"docker worktree commit\\""',
+              { cwd: ctx.sandboxRepoDir },
+            );
+          }),
+      ).pipe(Effect.provide(Layer.merge(translatingLayer, testDisplayLayer))),
+    );
+
+    // Commit should be cherry-picked onto host's current branch (main)
+    const { stdout: log } = await execAsync("git log --oneline main", {
+      cwd: hostDir,
+    });
+    expect(log).toContain("docker worktree commit");
+    expect(result.commits).toHaveLength(1);
+    expect(result.branch).toBe("main");
+
+    // Temp branch should be deleted
+    const { stdout: branches } = await execAsync(
+      'git branch --list "sandcastle/test"',
+      { cwd: hostDir },
+    );
+    expect(branches.trim()).toBe("");
   });
 
   it("no cherry-pick when explicit branch is given", async () => {

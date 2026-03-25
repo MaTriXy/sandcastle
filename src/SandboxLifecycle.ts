@@ -16,6 +16,9 @@ export interface SandboxLifecycleOptions {
   readonly branch?: string;
   /** When true, skip sync-in and sync-out (worktree mode: repo is bind-mounted directly). */
   readonly skipSync?: boolean;
+  /** Host-side path to the worktree directory. Required in worktree mode when sandboxRepoDir
+   *  is a container path that doesn't exist on the host (e.g. /home/agent/workspace). */
+  readonly hostWorktreePath?: string;
 }
 
 export interface SandboxContext {
@@ -39,7 +42,14 @@ export const withSandboxLifecycle = <A>(
   Effect.gen(function* () {
     const sandbox = yield* Sandbox;
     const display = yield* Display;
-    const { hostRepoDir, sandboxRepoDir, hooks, branch, skipSync } = options;
+    const {
+      hostRepoDir,
+      sandboxRepoDir,
+      hooks,
+      branch,
+      skipSync,
+      hostWorktreePath,
+    } = options;
 
     // In worktree mode with no explicit branch, record host's current branch for cherry-pick
     const hostCurrentBranch: string | null =
@@ -141,6 +151,11 @@ export const withSandboxLifecycle = <A>(
     let commits: { sha: string }[];
     let finalBranch: string;
 
+    // For host-side git operations in worktree mode, use hostWorktreePath
+    // (the real path on the host) instead of sandboxRepoDir (which may be a container path
+    // like /home/agent/workspace that doesn't exist on the host).
+    const hostSideWorktreePath = hostWorktreePath ?? sandboxRepoDir;
+
     if (hostCurrentBranch !== null) {
       // Temp branch mode: collect worktree commits, detach, cherry-pick, delete branch
 
@@ -149,7 +164,7 @@ export const withSandboxLifecycle = <A>(
         try {
           const { stdout } = await execAsync(
             `git rev-list "${baseHead}..HEAD" --reverse`,
-            { cwd: sandboxRepoDir },
+            { cwd: hostSideWorktreePath },
           );
           const lines = stdout.trim();
           if (!lines) return [];

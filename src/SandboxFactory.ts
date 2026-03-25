@@ -23,11 +23,16 @@ export class SandboxConfig extends Context.Tag("SandboxConfig")<
   }
 >() {}
 
+export interface SandboxInfo {
+  /** Host-side path to the worktree directory (worktree mode only). */
+  readonly hostWorktreePath?: string;
+}
+
 export class SandboxFactory extends Context.Tag("SandboxFactory")<
   SandboxFactory,
   {
     readonly withSandbox: <A, E, R>(
-      effect: Effect.Effect<A, E, R | Sandbox>,
+      makeEffect: (info: SandboxInfo) => Effect.Effect<A, E, R | Sandbox>,
     ) => Effect.Effect<A, E | DockerError, Exclude<R, Sandbox>>;
     /** True in worktree mode — the repo is bind-mounted, so sync is unnecessary. */
     readonly skipSync: boolean;
@@ -89,7 +94,7 @@ export const WorktreeDockerSandboxFactory = {
       return {
         skipSync: true,
         withSandbox: <A, E, R>(
-          effect: Effect.Effect<A, E, R | Sandbox>,
+          makeEffect: (info: SandboxInfo) => Effect.Effect<A, E, R | Sandbox>,
         ): Effect.Effect<A, E | DockerError, Exclude<R, Sandbox>> => {
           const containerName = `sandcastle-${randomUUID()}`;
 
@@ -156,8 +161,8 @@ export const WorktreeDockerSandboxFactory = {
                 }),
               ),
             // Use
-            () =>
-              effect.pipe(
+            ({ worktreeInfo }) =>
+              makeEffect({ hostWorktreePath: worktreeInfo.path }).pipe(
                 Effect.provide(DockerSandbox.layer(containerName)),
               ) as Effect.Effect<A, E | DockerError, Exclude<R, Sandbox>>,
             // Release: remove container, then remove worktree
@@ -190,7 +195,7 @@ export const DockerSandboxFactory = {
       return {
         skipSync: false,
         withSandbox: <A, E, R>(
-          effect: Effect.Effect<A, E, R | Sandbox>,
+          makeEffect: (info: SandboxInfo) => Effect.Effect<A, E, R | Sandbox>,
         ): Effect.Effect<A, E | DockerError, Exclude<R, Sandbox>> => {
           const containerName = `sandcastle-${randomUUID()}`;
 
@@ -211,7 +216,7 @@ export const DockerSandboxFactory = {
               ),
             ),
             () =>
-              effect.pipe(
+              makeEffect({}).pipe(
                 Effect.provide(DockerSandbox.layer(containerName)),
               ) as Effect.Effect<A, E | DockerError, Exclude<R, Sandbox>>,
             () =>
