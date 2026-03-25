@@ -40,6 +40,14 @@
 | **Build-image**      | The CLI command that rebuilds the Docker image from an existing **config directory**                                       | "setup-sandbox" (old name)             |
 | **Remove-image**     | The CLI command that removes the Docker image                                                                              | "cleanup-sandbox" (old name)           |
 
+## Output
+
+| Term                 | Definition                                                                                                            | Aliases to avoid                                                              |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| **Log-to-file mode** | The display mode where Sandcastle writes iteration progress and agent output to a **run log** instead of the terminal | "file mode", "file logging", "quiet mode"                                     |
+| **Run log**          | A log file written to `.sandcastle/logs/` during a run session, recording iteration progress and agent output         | "log file" (too generic), "output file"                                       |
+| **Terminal mode**    | The display mode where Sandcastle renders an interactive UI in the terminal using spinners and styled status messages | "stdout mode", "interactive mode", "CLI mode" (ambiguous with the CLI itself) |
+
 ## Architecture
 
 | Term                | Definition                                                                                                                                                                      | Aliases to avoid       |
@@ -65,6 +73,9 @@
 - **Prompt argument substitution** runs before **prompt expansion**, so **prompt arguments** can inject values into **shell expressions**
 - A `{{KEY}}` placeholder with no matching **prompt argument** is an error; unused **prompt arguments** produce a warning
 - A **prompt** may contain zero or more **prompt arguments** and/or **shell expressions**; each substitution step is skipped if there are no matches
+- **Log-to-file mode** is the default for programmatic use via `run()`; **terminal mode** is the default for the `sandcastle run` CLI command
+- In **log-to-file mode**, Sandcastle writes a **run log** to `.sandcastle/logs/` and prints a `tail -f` command to the console so the developer can follow along
+- In **terminal mode**, Sandcastle renders spinners, styled status messages, and summaries directly in the terminal
 
 ## Example dialogue
 
@@ -101,3 +112,4 @@
 - **"Token"** vs **"Env var"** — The old `TokenResolver` name implied it only handled auth tokens. The **env resolver** handles all environment variables generically. Use "env var" for the general concept; "token" only when referring specifically to an auth credential value.
 - **"Command"** — Heavily overloaded: hook commands, shell commands, CLI commands, **shell expressions**. Use **shell expression** for the `` !`...` `` syntax in **prompts**; use "hook" for lifecycle hooks; use "CLI command" for `sandcastle run`, `sandcastle init`, etc.
 - **"Variable"** vs **"Argument"** — Env vars and **prompt arguments** are both key-value pairs, but they serve different purposes. **Prompt arguments** are host-side values substituted into `{{KEY}}` placeholders. Env vars are passed into the **sandbox** environment. Don't call prompt arguments "variables" or "template variables".
+- **"File mode"** vs **"Log-to-file mode"** — Use **log-to-file mode** to be explicit about what's happening. "File mode" is too terse and could be confused with other file operations. Similarly, avoid "stdout mode" for **terminal mode** — stdout is an implementation detail, not the user-facing concept.
