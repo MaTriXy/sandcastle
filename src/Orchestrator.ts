@@ -223,12 +223,14 @@ export const orchestrate = (
     const { hostRepoDir, sandboxRepoDir, iterations, hooks, prompt, branch } =
       options;
     const resolvedModel = options.model ?? DEFAULT_MODEL;
-    const completionSignals: string[] =
-      options.completionSignal === undefined
-        ? [DEFAULT_COMPLETION_SIGNAL]
-        : Array.isArray(options.completionSignal)
-          ? options.completionSignal
-          : [options.completionSignal];
+    let completionSignals: string[];
+    if (options.completionSignal === undefined) {
+      completionSignals = [DEFAULT_COMPLETION_SIGNAL];
+    } else if (Array.isArray(options.completionSignal)) {
+      completionSignals = options.completionSignal;
+    } else {
+      completionSignals = [options.completionSignal];
+    }
 
     const label = (msg: string): string =>
       options.name ? `[${options.name}] ${msg}` : msg;
