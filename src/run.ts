@@ -119,10 +119,10 @@ export const buildRunSummaryRows = (
  * and log-to-file mode to record the final outcome.
  */
 export const buildCompletionMessage = (
-  wasCompletionSignalDetected: boolean,
+  completionSignal: string | undefined,
   iterationsRun: number,
 ): { readonly message: string; readonly severity: Severity } => {
-  if (wasCompletionSignalDetected) {
+  if (completionSignal !== undefined) {
     return {
       message: `Run complete: agent finished after ${iterationsRun} iteration(s).`,
       severity: "success",
@@ -166,8 +166,8 @@ export interface RunOptions {
   readonly promptArgs?: PromptArgs;
   /** Logging mode (default: { type: 'file' } with auto-generated path under .sandcastle/logs/) */
   readonly logging?: LoggingOption;
-  /** Custom completion signal string (default: "<promise>COMPLETE</promise>") */
-  readonly completionSignal?: string;
+  /** Custom completion signal string or array of strings (default: "<promise>COMPLETE</promise>") */
+  readonly completionSignal?: string | string[];
   /** Idle timeout in seconds. If the agent produces no output for this long, it fails. Default: 300 (5 minutes) */
   readonly idleTimeoutSeconds?: number;
   /** Optional name for the run, shown as a prefix in log output */
@@ -179,8 +179,8 @@ export interface RunOptions {
 export interface RunResult {
   /** Number of iterations the agent completed during this run. */
   readonly iterationsRun: number;
-  /** Whether the agent emitted the completion signal before the iteration limit was reached. */
-  readonly wasCompletionSignalDetected: boolean;
+  /** The matched completion signal string, or undefined if no signal fired before the iteration limit. */
+  readonly completionSignal?: string;
   /** Combined stdout output from all agent iterations. */
   readonly stdout: string;
   /** List of commits made by the agent during the run, each identified by its SHA. */
@@ -331,7 +331,7 @@ export const run = async (options: RunOptions): Promise<RunResult> => {
       });
 
       const completion = buildCompletionMessage(
-        orchestrateResult.wasCompletionSignalDetected,
+        orchestrateResult.completionSignal,
         orchestrateResult.iterationsRun,
       );
       yield* d.status(completion.message, completion.severity);
