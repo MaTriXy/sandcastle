@@ -86,7 +86,11 @@ const makeTestSandboxFactory = (
       makeEffect: (
         info: import("./SandboxFactory.js").SandboxInfo,
       ) => Effect.Effect<A, E, R | Sandbox>,
-    ): Effect.Effect<A, E | DockerError, Exclude<R, Sandbox>> =>
+    ): Effect.Effect<
+      import("./SandboxFactory.js").WithSandboxResult<A>,
+      E | DockerError,
+      Exclude<R, Sandbox>
+    > =>
       Effect.acquireUseRelease(
         // Acquire: create fresh worktree from host repo
         Effect.promise(async () => {
@@ -113,6 +117,8 @@ const makeTestSandboxFactory = (
               ).catch(() => {});
             } catch {}
           }),
+      ).pipe(
+        Effect.map((value) => ({ value, preservedWorktreePath: undefined })),
       ),
   });
 

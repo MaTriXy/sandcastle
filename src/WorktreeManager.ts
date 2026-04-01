@@ -189,6 +189,17 @@ export const create = (
   });
 
 /**
+ * Returns true if the worktree at `worktreePath` has any uncommitted changes:
+ * unstaged modifications, staged changes, or untracked files.
+ */
+export const hasUncommittedChanges = (
+  worktreePath: string,
+): Effect.Effect<boolean, WorktreeError> =>
+  execGit(["status", "--porcelain"], worktreePath).pipe(
+    Effect.map((output) => output.trim().length > 0),
+  );
+
+/**
  * Removes a worktree and its git metadata.
  *
  * The `worktreePath` must be a path inside `.sandcastle/worktrees/` so that

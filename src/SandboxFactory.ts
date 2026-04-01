@@ -238,12 +238,22 @@ export interface SandboxInfo {
   readonly hostWorktreePath?: string;
 }
 
+export interface WithSandboxResult<A> {
+  readonly value: A;
+  /** Host path to the preserved worktree, set when the worktree was left behind due to uncommitted changes. */
+  readonly preservedWorktreePath?: string;
+}
+
 export class SandboxFactory extends Context.Tag("SandboxFactory")<
   SandboxFactory,
   {
     readonly withSandbox: <A, E, R>(
       makeEffect: (info: SandboxInfo) => Effect.Effect<A, E, R | Sandbox>,
-    ) => Effect.Effect<A, E | DockerError | WorktreeError, Exclude<R, Sandbox>>;
+    ) => Effect.Effect<
+      WithSandboxResult<A>,
+      E | DockerError | WorktreeError,
+      Exclude<R, Sandbox>
+    >;
   }
 >() {}
 
@@ -276,12 +286,31 @@ export class WorktreeSandboxConfig extends Context.Tag("WorktreeSandboxConfig")<
 
 /**
  * Print a message to stderr telling the developer where the preserved worktree is
- * and how to clean it up manually.
+ * and how to clean it up manually (failure + dirty case).
  */
 const printWorktreePreservedMessage = (worktreePath: string): void => {
   console.error(`\nWorktree preserved at ${worktreePath}`);
   console.error(`  To review: cd ${worktreePath}`);
   console.error(`  To clean up: git worktree remove --force ${worktreePath}`);
+};
+
+/**
+ * Print a message to stderr when the run succeeded but the worktree has uncommitted changes.
+ */
+const printSuccessDirtyWorktreeMessage = (worktreePath: string): void => {
+  console.error(
+    `\nRun succeeded but worktree has uncommitted changes at ${worktreePath}`,
+  );
+  console.error(`  To review: cd ${worktreePath}`);
+  console.error(`  To clean up: git worktree remove --force ${worktreePath}`);
+};
+
+/**
+ * Print a message to stderr when the worktree was removed because there were
+ * no uncommitted changes after a failed run.
+ */
+const printWorktreeRemovedCleanMessage = (): void => {
+  console.error(`\nWorktree removed (no uncommitted changes)`);
 };
 
 /**
@@ -307,7 +336,7 @@ export const WorktreeDockerSandboxFactory = {
         withSandbox: <A, E, R>(
           makeEffect: (info: SandboxInfo) => Effect.Effect<A, E, R | Sandbox>,
         ): Effect.Effect<
-          A,
+          WithSandboxResult<A>,
           E | DockerError | WorktreeError,
           Exclude<R, Sandbox>
         > => {
@@ -413,7 +442,7 @@ export const WorktreeDockerSandboxFactory = {
               makeEffect({ hostWorktreePath: worktreeInfo.path }).pipe(
                 Effect.provide(makeDockerSandboxLayer(containerName)),
               ) as Effect.Effect<A, E | DockerError, Exclude<R, Sandbox>>,
-            // Release: always remove container; remove worktree only on success.
+            // Release: always remove container; remove/preserve worktree based on dirty state.
             ({ worktreeInfo, cleanupContainerOnly, onSignal }, exit) =>
               Effect.sync(() => {
                 process.removeListener("exit", cleanupContainerOnly);
@@ -422,16 +451,33 @@ export const WorktreeDockerSandboxFactory = {
               }).pipe(
                 Effect.andThen(removeContainer(containerName)),
                 Effect.andThen(
-                  Exit.isSuccess(exit)
-                    ? WorktreeManager.remove(worktreeInfo.path)
-                    : Effect.sync(() => {
+                  WorktreeManager.hasUncommittedChanges(worktreeInfo.path).pipe(
+                    Effect.catchAll(() => Effect.succeed(false)),
+                    Effect.flatMap((isDirty) => {
+                      if (isDirty) {
                         preservedWorktreePath = worktreeInfo.path;
-                        printWorktreePreservedMessage(worktreeInfo.path);
-                      }),
+                        if (Exit.isSuccess(exit)) {
+                          printSuccessDirtyWorktreeMessage(worktreeInfo.path);
+                        } else {
+                          printWorktreePreservedMessage(worktreeInfo.path);
+                        }
+                        return Effect.void;
+                      } else {
+                        if (!Exit.isSuccess(exit)) {
+                          printWorktreeRemovedCleanMessage();
+                        }
+                        return WorktreeManager.remove(worktreeInfo.path);
+                      }
+                    }),
+                  ),
                 ),
                 Effect.orDie,
               ),
           ).pipe(
+            Effect.map((value) => ({
+              value,
+              preservedWorktreePath,
+            })),
             // Attach the preserved worktree path to TimeoutError and AgentError so
             // programmatic callers can build on top of the preserved worktree.
             Effect.mapError((e: E | DockerError | WorktreeError) => {

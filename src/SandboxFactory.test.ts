@@ -15,6 +15,7 @@ vi.mock("./WorktreeManager.js", () => ({
   create: vi.fn(),
   remove: vi.fn(),
   pruneStale: vi.fn(),
+  hasUncommittedChanges: vi.fn(),
 }));
 
 import { execFile } from "node:child_process";
@@ -30,6 +31,9 @@ const mockExecFile = vi.mocked(execFile);
 const mockCreate = vi.mocked(WorktreeManager.create);
 const mockRemove = vi.mocked(WorktreeManager.remove);
 const mockPruneStale = vi.mocked(WorktreeManager.pruneStale);
+const mockHasUncommittedChanges = vi.mocked(
+  WorktreeManager.hasUncommittedChanges,
+);
 
 /** Make all execFile calls succeed with given stdout. */
 const mockDockerSuccess = (stdout = "") => {
@@ -76,6 +80,8 @@ describe("WorktreeDockerSandboxFactory", () => {
     );
     mockRemove.mockReturnValue(Effect.void);
     mockPruneStale.mockReturnValue(Effect.void);
+    // Default: clean worktree (no uncommitted changes)
+    mockHasUncommittedChanges.mockReturnValue(Effect.succeed(false));
     mockDockerSuccess();
   });
 
@@ -260,7 +266,8 @@ describe("WorktreeDockerSandboxFactory", () => {
     expect(runArgs).not.toContain("HOME=/tmp/evil");
   });
 
-  it("preserves worktree (does not remove) when the effect fails", async () => {
+  it("preserves worktree (does not remove) when the effect fails with dirty worktree", async () => {
+    mockHasUncommittedChanges.mockReturnValue(Effect.succeed(true));
     await expect(
       Effect.runPromise(
         Effect.gen(function* () {
@@ -273,7 +280,8 @@ describe("WorktreeDockerSandboxFactory", () => {
     expect(mockRemove).not.toHaveBeenCalled();
   });
 
-  it("removes container but preserves worktree on typed failure", async () => {
+  it("removes container but preserves worktree on typed failure with dirty worktree", async () => {
+    mockHasUncommittedChanges.mockReturnValue(Effect.succeed(true));
     await expect(
       Effect.runPromise(
         Effect.gen(function* () {
@@ -292,7 +300,8 @@ describe("WorktreeDockerSandboxFactory", () => {
     expect(allArgs.some((args) => args[0] === "rm")).toBe(true);
   });
 
-  it("attaches preservedWorktreePath to TimeoutError on failure", async () => {
+  it("attaches preservedWorktreePath to TimeoutError on failure with dirty worktree", async () => {
+    mockHasUncommittedChanges.mockReturnValue(Effect.succeed(true));
     const exit = await Effect.runPromiseExit(
       Effect.gen(function* () {
         const factory = yield* SandboxFactory;
@@ -314,7 +323,8 @@ describe("WorktreeDockerSandboxFactory", () => {
     );
   });
 
-  it("attaches preservedWorktreePath to AgentError on failure", async () => {
+  it("attaches preservedWorktreePath to AgentError on failure with dirty worktree", async () => {
+    mockHasUncommittedChanges.mockReturnValue(Effect.succeed(true));
     const exit = await Effect.runPromiseExit(
       Effect.gen(function* () {
         const factory = yield* SandboxFactory;
@@ -366,5 +376,127 @@ describe("WorktreeDockerSandboxFactory", () => {
       (e) => e._tag === "spinner" && e.message === "Copying to sandbox",
     );
     expect(spinnerEntry).toBeDefined();
+  });
+
+  it("removes worktree silently on success with clean worktree", async () => {
+    mockHasUncommittedChanges.mockReturnValue(Effect.succeed(false));
+    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const factory = yield* SandboxFactory;
+        yield* factory.withSandbox(() => Effect.void);
+      }).pipe(Effect.provide(makeLayer())),
+    );
+
+    expect(mockRemove).toHaveBeenCalledWith(worktreePath);
+    expect(stderrSpy).not.toHaveBeenCalled();
+    stderrSpy.mockRestore();
+  });
+
+  it("preserves worktree and returns preservedWorktreePath on success with dirty worktree", async () => {
+    mockHasUncommittedChanges.mockReturnValue(Effect.succeed(true));
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const factory = yield* SandboxFactory;
+        return yield* factory.withSandbox(() => Effect.succeed("done"));
+      }).pipe(Effect.provide(makeLayer())),
+    );
+
+    expect(mockRemove).not.toHaveBeenCalled();
+    expect(result.preservedWorktreePath).toBe(worktreePath);
+    expect(result.value).toBe("done");
+  });
+
+  it("prints uncommitted changes message on success with dirty worktree", async () => {
+    mockHasUncommittedChanges.mockReturnValue(Effect.succeed(true));
+    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const factory = yield* SandboxFactory;
+        yield* factory.withSandbox(() => Effect.void);
+      }).pipe(Effect.provide(makeLayer())),
+    );
+
+    const output = stderrSpy.mock.calls.map((c) => c[0]).join(" ");
+    expect(output).toContain("uncommitted changes");
+    expect(output).toContain(worktreePath);
+    stderrSpy.mockRestore();
+  });
+
+  it("removes worktree on failure with clean worktree", async () => {
+    mockHasUncommittedChanges.mockReturnValue(Effect.succeed(false));
+
+    await expect(
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const factory = yield* SandboxFactory;
+          yield* factory.withSandbox(() =>
+            Effect.fail(new AgentError({ message: "agent failed" })),
+          );
+        }).pipe(Effect.provide(makeLayer())),
+      ),
+    ).rejects.toThrow();
+
+    expect(mockRemove).toHaveBeenCalledWith(worktreePath);
+  });
+
+  it("prints 'no uncommitted changes' message on failure with clean worktree", async () => {
+    mockHasUncommittedChanges.mockReturnValue(Effect.succeed(false));
+    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const factory = yield* SandboxFactory;
+          yield* factory.withSandbox(() =>
+            Effect.fail(new AgentError({ message: "agent failed" })),
+          );
+        }).pipe(Effect.provide(makeLayer())),
+      ),
+    ).rejects.toThrow();
+
+    const output = stderrSpy.mock.calls.map((c) => c[0]).join(" ");
+    expect(output).toContain("no uncommitted changes");
+    stderrSpy.mockRestore();
+  });
+
+  it("does not attach preservedWorktreePath to TimeoutError when worktree is clean on failure", async () => {
+    mockHasUncommittedChanges.mockReturnValue(Effect.succeed(false));
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const factory = yield* SandboxFactory;
+        yield* factory.withSandbox(() =>
+          Effect.fail(
+            new TimeoutError({ message: "timed out", idleTimeoutSeconds: 30 }),
+          ),
+        );
+      }).pipe(Effect.provide(makeLayer())),
+    );
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (!Exit.isFailure(exit)) throw new Error("unreachable");
+    expect(exit.cause._tag).toBe("Fail");
+    if (exit.cause._tag !== "Fail") throw new Error("unreachable");
+    expect(exit.cause.error).toBeInstanceOf(TimeoutError);
+    expect(
+      (exit.cause.error as TimeoutError).preservedWorktreePath,
+    ).toBeUndefined();
+  });
+
+  it("returns undefined preservedWorktreePath on success with clean worktree", async () => {
+    mockHasUncommittedChanges.mockReturnValue(Effect.succeed(false));
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const factory = yield* SandboxFactory;
+        return yield* factory.withSandbox(() => Effect.succeed("done"));
+      }).pipe(Effect.provide(makeLayer())),
+    );
+
+    expect(result.preservedWorktreePath).toBeUndefined();
+    expect(result.value).toBe("done");
   });
 });

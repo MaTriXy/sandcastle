@@ -189,6 +189,8 @@ export interface RunResult {
   readonly branch: string;
   /** Path to the log file, if logging was drained to a file. */
   readonly logFilePath?: string;
+  /** Host path to the preserved worktree, set when the run succeeded but the worktree had uncommitted changes. */
+  readonly preservedWorktreePath?: string;
 }
 
 export const run = async (options: RunOptions): Promise<RunResult> => {
@@ -344,5 +346,6 @@ export const run = async (options: RunOptions): Promise<RunResult> => {
     ...result,
     logFilePath:
       resolvedLogging.type === "file" ? resolvedLogging.path : undefined,
+    preservedWorktreePath: result.preservedWorktreePath,
   };
 };

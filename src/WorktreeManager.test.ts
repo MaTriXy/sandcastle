@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import {
   create,
   generateTempBranchName,
+  hasUncommittedChanges,
   pruneStale,
   remove,
   sanitizeAgentName,
@@ -328,5 +329,57 @@ describe("WorktreeManager.pruneStale", () => {
     await run(remove(path));
     // suppress unused var warning
     void name;
+  });
+});
+
+describe("WorktreeManager.hasUncommittedChanges", () => {
+  it("returns false for a clean worktree", async () => {
+    const repoDir = await setupRepo();
+    const { path } = await run(create(repoDir));
+
+    const result = await run(hasUncommittedChanges(path));
+    expect(result).toBe(false);
+
+    await run(remove(path));
+  });
+
+  it("returns true when there are unstaged modifications", async () => {
+    const repoDir = await setupRepo();
+    const { path } = await run(create(repoDir));
+
+    // Modify a tracked file without staging
+    await writeFile(join(path, "hello.txt"), "modified content");
+
+    const result = await run(hasUncommittedChanges(path));
+    expect(result).toBe(true);
+
+    await run(remove(path));
+  });
+
+  it("returns true when there are staged changes", async () => {
+    const repoDir = await setupRepo();
+    const { path } = await run(create(repoDir));
+
+    // Stage a new file
+    await writeFile(join(path, "new-file.txt"), "new content");
+    await execAsync("git add new-file.txt", { cwd: path });
+
+    const result = await run(hasUncommittedChanges(path));
+    expect(result).toBe(true);
+
+    await run(remove(path));
+  });
+
+  it("returns true when there are untracked files", async () => {
+    const repoDir = await setupRepo();
+    const { path } = await run(create(repoDir));
+
+    // Add an untracked file
+    await writeFile(join(path, "untracked.txt"), "untracked");
+
+    const result = await run(hasUncommittedChanges(path));
+    expect(result).toBe(true);
+
+    await run(remove(path));
   });
 });

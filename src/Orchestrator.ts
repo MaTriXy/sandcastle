@@ -249,6 +249,8 @@ export interface OrchestrateResult {
   readonly stdout: string;
   readonly commits: { sha: string }[];
   readonly branch: string;
+  /** Host path to the preserved worktree from the last iteration, set when the worktree was left behind due to uncommitted changes on a successful run. */
+  readonly preservedWorktreePath?: string;
 }
 
 export const orchestrate = (
@@ -281,62 +283,64 @@ export const orchestrate = (
     for (let i = 1; i <= iterations; i++) {
       yield* display.status(label(`Iteration ${i}/${iterations}`), "info");
 
-      const lifecycleResult = yield* factory.withSandbox(
-        ({ hostWorktreePath }) =>
-          withSandboxLifecycle(
-            {
-              hostRepoDir,
-              sandboxRepoDir,
-              hooks,
-              branch,
-              hostWorktreePath,
-            },
-            (ctx) =>
-              Effect.gen(function* () {
-                // Preprocess prompt (run !`command` expressions inside sandbox)
-                const fullPrompt = yield* preprocessPrompt(
-                  prompt,
-                  ctx.sandbox,
-                  ctx.sandboxRepoDir,
-                );
+      const sandboxResult = yield* factory.withSandbox(({ hostWorktreePath }) =>
+        withSandboxLifecycle(
+          {
+            hostRepoDir,
+            sandboxRepoDir,
+            hooks,
+            branch,
+            hostWorktreePath,
+          },
+          (ctx) =>
+            Effect.gen(function* () {
+              // Preprocess prompt (run !`command` expressions inside sandbox)
+              const fullPrompt = yield* preprocessPrompt(
+                prompt,
+                ctx.sandbox,
+                ctx.sandboxRepoDir,
+              );
 
-                yield* display.status(label("Agent started"), "success");
+              yield* display.status(label("Agent started"), "success");
 
-                // Invoke the agent
-                const onText = (text: string) => {
-                  Effect.runPromise(display.text(text));
-                };
-                const onToolCall = (name: string, formattedArgs: string) => {
-                  Effect.runPromise(display.toolCall(name, formattedArgs));
-                };
-                const { result: agentOutput, usage } = yield* invokeAgent(
-                  ctx.sandbox,
-                  ctx.sandboxRepoDir,
-                  fullPrompt,
-                  resolvedModel,
-                  idleTimeoutMs,
-                  onText,
-                  onToolCall,
-                );
+              // Invoke the agent
+              const onText = (text: string) => {
+                Effect.runPromise(display.text(text));
+              };
+              const onToolCall = (name: string, formattedArgs: string) => {
+                Effect.runPromise(display.toolCall(name, formattedArgs));
+              };
+              const { result: agentOutput, usage } = yield* invokeAgent(
+                ctx.sandbox,
+                ctx.sandboxRepoDir,
+                fullPrompt,
+                resolvedModel,
+                idleTimeoutMs,
+                onText,
+                onToolCall,
+              );
 
-                yield* display.status(label("Agent stopped"), "info");
+              yield* display.status(label("Agent stopped"), "info");
 
-                // Log usage summary
-                if (usage) {
-                  yield* display.summary("Token Usage", formatUsageRows(usage));
-                }
+              // Log usage summary
+              if (usage) {
+                yield* display.summary("Token Usage", formatUsageRows(usage));
+              }
 
-                // Check completion signal
-                const matchedSignal = completionSignals.find((sig) =>
-                  agentOutput.includes(sig),
-                );
-                return {
-                  completionSignal: matchedSignal,
-                  stdout: agentOutput,
-                } as const;
-              }),
-          ),
+              // Check completion signal
+              const matchedSignal = completionSignals.find((sig) =>
+                agentOutput.includes(sig),
+              );
+              return {
+                completionSignal: matchedSignal,
+                stdout: agentOutput,
+              } as const;
+            }),
+        ),
       );
+
+      const lifecycleResult = sandboxResult.value;
+      const iterationPreservedPath = sandboxResult.preservedWorktreePath;
 
       allCommits.push(...lifecycleResult.commits);
       allStdout += lifecycleResult.result.stdout;
@@ -353,6 +357,7 @@ export const orchestrate = (
           stdout: allStdout,
           commits: allCommits,
           branch: resolvedBranch,
+          preservedWorktreePath: iterationPreservedPath,
         };
       }
     }
@@ -367,6 +372,7 @@ export const orchestrate = (
       stdout: allStdout,
       commits: allCommits,
       branch: resolvedBranch,
+      preservedWorktreePath: undefined,
     };
   });
 };
