@@ -281,7 +281,6 @@ const startIsolatedProviderSandbox = (
       const handle = await provider.create({ env });
       await syncIn(hostRepoDir, handle);
 
-      // Copy copyToSandbox files into the sandbox via copyIn
       if (copyPaths && copyPaths.length > 0) {
         for (const relativePath of copyPaths) {
           const hostPath = join(hostRepoDir, relativePath);
