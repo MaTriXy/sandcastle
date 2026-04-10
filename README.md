@@ -102,6 +102,10 @@ const result = await run({
   // { mode: 'branch', branch } — create a worktree on an explicit branch.
   worktree: { mode: "branch", branch: "agent/fix-42" },
 
+  // Sandbox provider — optional. Defaults to Docker internally.
+  // Import from "sandcastle/sandboxes/docker" for explicit Docker usage:
+  // sandbox: docker({ imageName: "sandcastle:local" }),
+
   // Docker image used for the sandbox. Default: "sandcastle:<repo-dir-name>"
   imageName: "sandcastle:local",
 

@@ -9,6 +9,10 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./sandboxes/docker": {
+      "import": "./dist/sandboxes/docker.js",
+      "types": "./dist/sandboxes/docker.d.ts"
     }
   },
   "bin": {

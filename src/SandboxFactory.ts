@@ -22,6 +22,10 @@ import {
 import * as WorktreeManager from "./WorktreeManager.js";
 import { copyToSandbox } from "./CopyToSandbox.js";
 import { Display } from "./Display.js";
+import type {
+  SandboxProvider,
+  BindMountSandboxHandle,
+} from "./SandboxProvider.js";
 
 export interface ExecResult {
   readonly stdout: string;
@@ -233,6 +237,45 @@ export const makeDockerSandboxLayer = (
     Layer.provide(NodeFileSystem.layer),
   );
 
+/**
+ * Wrap a Promise-based BindMountSandboxHandle into an Effect-based SandboxService layer.
+ */
+export const makeSandboxLayerFromHandle = (
+  handle: BindMountSandboxHandle,
+): Layer.Layer<Sandbox> =>
+  Layer.succeed(Sandbox, {
+    exec: (command, options) =>
+      Effect.tryPromise({
+        try: () => handle.exec(command, options),
+        catch: (e) =>
+          new ExecError({
+            command,
+            message: `exec failed: ${e instanceof Error ? e.message : String(e)}`,
+          }),
+      }),
+    execStreaming: (command, onStdoutLine, options) =>
+      Effect.tryPromise({
+        try: () => handle.execStreaming(command, onStdoutLine, options),
+        catch: (e) =>
+          new ExecError({
+            command,
+            message: `exec streaming failed: ${e instanceof Error ? e.message : String(e)}`,
+          }),
+      }),
+    copyIn: (hostPath, sandboxPath) =>
+      Effect.fail(
+        new CopyError({
+          message: "copyIn is not supported for bind-mount sandbox providers",
+        }),
+      ),
+    copyOut: (sandboxPath, hostPath) =>
+      Effect.fail(
+        new CopyError({
+          message: "copyOut is not supported for bind-mount sandbox providers",
+        }),
+      ),
+  });
+
 /** The mount point inside the container where the project worktree is bound. */
 export const SANDBOX_WORKSPACE_DIR = "/home/agent/workspace";
 
@@ -284,6 +327,8 @@ export class WorktreeSandboxConfig extends Context.Tag("WorktreeSandboxConfig")<
     readonly copyToSandbox?: string[];
     /** When specified, the run name is included in the auto-generated branch and worktree names. */
     readonly name?: string;
+    /** Optional sandbox provider — when set, delegates container lifecycle to the provider. */
+    readonly sandboxProvider?: SandboxProvider;
   }
 >() {}
 
@@ -371,6 +416,73 @@ export const resolveGitVolumeMounts = (
     const parentGitDir = resolve(gitdirPath, "..", "..");
     return [`${gitPath}:${gitPath}`, `${parentGitDir}:${parentGitDir}`];
   });
+/**
+ * Convert git mount strings ("host:container") into the provider's mounts format.
+ */
+const gitMountsToProviderMounts = (
+  gitMountStrings: string[],
+): Array<{ hostPath: string; sandboxPath: string; readonly?: boolean }> =>
+  gitMountStrings.map((m) => {
+    const [hostPath, sandboxPath] = m.split(":");
+    return { hostPath: hostPath!, sandboxPath: sandboxPath! };
+  });
+
+/**
+ * Start a sandbox using the provider abstraction.
+ * Returns the handle, sandbox layer, and workspace path.
+ */
+const startProviderSandbox = (
+  provider: SandboxProvider,
+  worktreeOrRepoPath: string,
+  hostRepoDir: string,
+  env: Record<string, string>,
+  gitMountStrings: string[],
+  workspaceDir: string,
+): Effect.Effect<
+  {
+    handle: BindMountSandboxHandle;
+    sandboxLayer: Layer.Layer<Sandbox>;
+    workspacePath: string;
+  },
+  DockerError | WorktreeError
+> =>
+  Effect.tryPromise({
+    try: () => {
+      const mounts = [
+        {
+          hostPath: worktreeOrRepoPath,
+          sandboxPath: workspaceDir,
+        },
+        ...gitMountsToProviderMounts(gitMountStrings),
+      ];
+      return provider.create({
+        worktreePath: worktreeOrRepoPath,
+        hostRepoPath: hostRepoDir,
+        mounts,
+        env,
+      });
+    },
+    catch: (e) =>
+      new WorktreeError({
+        message: `Provider '${provider.name}' create failed: ${e instanceof Error ? e.message : String(e)}`,
+      }),
+  }).pipe(
+    Effect.map((handle) => ({
+      handle,
+      sandboxLayer: makeSandboxLayerFromHandle(handle),
+      workspacePath: handle.workspacePath,
+    })),
+  );
+
+/** Shared acquire result type for the worktree-mode acquireUseRelease. */
+interface AcquireResult {
+  worktreeInfo: WorktreeManager.WorktreeInfo;
+  handle: BindMountSandboxHandle | undefined;
+  sandboxLayer: Layer.Layer<Sandbox> | undefined;
+  cleanupContainerOnly: () => void;
+  onSignal: () => void;
+}
+
 export const WorktreeDockerSandboxFactory = {
   layer: Layer.effect(
     SandboxFactory,
@@ -382,6 +494,7 @@ export const WorktreeDockerSandboxFactory = {
         worktree: worktreeMode,
         copyToSandbox: copyPaths,
         name,
+        sandboxProvider,
       } = yield* WorktreeSandboxConfig;
       const isNoneMode = worktreeMode?.mode === "none";
       const branch =
@@ -410,6 +523,41 @@ export const WorktreeDockerSandboxFactory = {
                   }) as E | DockerError | WorktreeError,
               ),
               Effect.flatMap((gitMounts) => {
+                if (sandboxProvider) {
+                  // Provider mode: delegate to the sandbox provider
+                  return Effect.acquireUseRelease(
+                    startProviderSandbox(
+                      sandboxProvider,
+                      hostRepoDir,
+                      hostRepoDir,
+                      env,
+                      gitMounts,
+                      SANDBOX_WORKSPACE_DIR,
+                    ),
+                    // Use
+                    ({ sandboxLayer }) =>
+                      makeEffect({}).pipe(
+                        Effect.provide(sandboxLayer),
+                      ) as Effect.Effect<
+                        A,
+                        E | DockerError,
+                        Exclude<R, Sandbox>
+                      >,
+                    // Release
+                    ({ handle }) =>
+                      Effect.tryPromise({
+                        try: () => handle.close(),
+                        catch: () => undefined,
+                      }).pipe(Effect.orDie),
+                  ).pipe(
+                    Effect.map((value) => ({
+                      value,
+                      preservedWorktreePath: undefined,
+                    })),
+                  );
+                }
+
+                // Legacy Docker mode
                 const volumeMounts = [
                   `${hostRepoDir}:${SANDBOX_WORKSPACE_DIR}`,
                   ...gitMounts,
@@ -498,58 +646,106 @@ export const WorktreeDockerSandboxFactory = {
                           message: `Failed to resolve git mounts: ${e}`,
                         }),
                     ),
-                    Effect.flatMap((gitMounts) => {
-                      const volumeMounts = [
-                        `${worktreeInfo.path}:${SANDBOX_WORKSPACE_DIR}`,
-                        ...gitMounts,
-                      ];
+                    Effect.flatMap(
+                      (
+                        gitMounts,
+                      ): Effect.Effect<
+                        AcquireResult,
+                        DockerError | WorktreeError,
+                        never
+                      > => {
+                        if (sandboxProvider) {
+                          // Provider mode: delegate to the sandbox provider
+                          return startProviderSandbox(
+                            sandboxProvider,
+                            worktreeInfo.path,
+                            hostRepoDir,
+                            env,
+                            gitMounts,
+                            SANDBOX_WORKSPACE_DIR,
+                          ).pipe(
+                            Effect.map(({ handle, sandboxLayer }) => ({
+                              worktreeInfo,
+                              handle: handle as
+                                | BindMountSandboxHandle
+                                | undefined,
+                              sandboxLayer: sandboxLayer as
+                                | Layer.Layer<Sandbox>
+                                | undefined,
+                              cleanupContainerOnly: () => {},
+                              onSignal: () => {},
+                            })),
+                          );
+                        }
 
-                      return startSandboxContainer(
-                        containerName,
-                        imageName,
-                        env,
-                        volumeMounts,
-                      ).pipe(
-                        Effect.tap(({ cleanupContainerOnly, onSignal }) =>
-                          Effect.sync(() => {
-                            // Override the default signal handler to also preserve the worktree
-                            process.removeListener("SIGINT", onSignal);
-                            process.removeListener("SIGTERM", onSignal);
-                            const onSignalWithWorktree = () => {
-                              cleanupContainerOnly();
-                              printWorktreePreservedMessage(
-                                worktreeInfo.path,
-                                `Worktree preserved at ${worktreeInfo.path}`,
-                              );
-                              process.exit(1);
-                            };
-                            process.on("SIGINT", onSignalWithWorktree);
-                            process.on("SIGTERM", onSignalWithWorktree);
-                          }),
-                        ),
-                        Effect.map(({ cleanupContainerOnly, onSignal }) => ({
-                          worktreeInfo,
-                          cleanupContainerOnly,
-                          onSignal,
-                        })),
-                      );
-                    }),
+                        // Legacy Docker mode
+                        const volumeMounts = [
+                          `${worktreeInfo.path}:${SANDBOX_WORKSPACE_DIR}`,
+                          ...gitMounts,
+                        ];
+
+                        return startSandboxContainer(
+                          containerName,
+                          imageName,
+                          env,
+                          volumeMounts,
+                        ).pipe(
+                          Effect.tap(({ cleanupContainerOnly, onSignal }) =>
+                            Effect.sync(() => {
+                              // Override the default signal handler to also preserve the worktree
+                              process.removeListener("SIGINT", onSignal);
+                              process.removeListener("SIGTERM", onSignal);
+                              const onSignalWithWorktree = () => {
+                                cleanupContainerOnly();
+                                printWorktreePreservedMessage(
+                                  worktreeInfo.path,
+                                  `Worktree preserved at ${worktreeInfo.path}`,
+                                );
+                                process.exit(1);
+                              };
+                              process.on("SIGINT", onSignalWithWorktree);
+                              process.on("SIGTERM", onSignalWithWorktree);
+                            }),
+                          ),
+                          Effect.map(({ cleanupContainerOnly, onSignal }) => ({
+                            worktreeInfo,
+                            handle: undefined as
+                              | BindMountSandboxHandle
+                              | undefined,
+                            sandboxLayer: undefined as
+                              | Layer.Layer<Sandbox>
+                              | undefined,
+                            cleanupContainerOnly,
+                            onSignal,
+                          })),
+                        );
+                      },
+                    ),
                   );
                 }),
               ),
             // Use
-            ({ worktreeInfo }) =>
+            ({ worktreeInfo, sandboxLayer }) =>
               makeEffect({ hostWorktreePath: worktreeInfo.path }).pipe(
-                Effect.provide(makeDockerSandboxLayer(containerName)),
+                Effect.provide(
+                  sandboxLayer ?? makeDockerSandboxLayer(containerName),
+                ),
               ) as Effect.Effect<A, E | DockerError, Exclude<R, Sandbox>>,
             // Release: always remove container; remove/preserve worktree based on dirty state.
-            ({ worktreeInfo, cleanupContainerOnly, onSignal }, exit) =>
+            ({ worktreeInfo, handle, cleanupContainerOnly, onSignal }, exit) =>
               Effect.sync(() => {
                 process.removeListener("exit", cleanupContainerOnly);
                 process.removeListener("SIGINT", onSignal);
                 process.removeListener("SIGTERM", onSignal);
               }).pipe(
-                Effect.andThen(removeContainer(containerName)),
+                Effect.andThen(
+                  handle
+                    ? Effect.tryPromise({
+                        try: () => handle.close(),
+                        catch: () => undefined,
+                      }).pipe(Effect.asVoid)
+                    : removeContainer(containerName),
+                ),
                 Effect.andThen(
                   WorktreeManager.hasUncommittedChanges(worktreeInfo.path).pipe(
                     Effect.catchAll(() => Effect.succeed(false)),

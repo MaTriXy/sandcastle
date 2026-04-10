@@ -35,14 +35,18 @@ import {
   SandboxFactory,
   SANDBOX_WORKSPACE_DIR,
   makeDockerSandboxLayer,
+  makeSandboxLayerFromHandle,
   resolveGitVolumeMounts,
 } from "./SandboxFactory.js";
+import type { SandboxProvider } from "./SandboxProvider.js";
 import * as WorktreeManager from "./WorktreeManager.js";
 import { copyToSandbox } from "./CopyToSandbox.js";
 
 export interface CreateSandboxOptions {
   /** Explicit branch for the worktree (required). */
   readonly branch: string;
+  /** Sandbox provider (e.g. docker()). When omitted, defaults to Docker internally. */
+  readonly sandbox?: SandboxProvider;
   /** Docker image name to use for the sandbox (default: sandcastle:<repo-dir-name>). */
   readonly imageName?: string;
   /** One-time setup hooks to run when the sandbox is first created. */
@@ -142,14 +146,47 @@ export const createSandbox = async (
     );
   }
 
-  // 3. Start container (Docker mode) or create local sandbox layer (test mode)
+  // 3. Start container (Docker mode), provider mode, or local sandbox layer (test mode)
   let containerName: string | undefined;
+  let providerHandle:
+    | import("./SandboxProvider.js").BindMountSandboxHandle
+    | undefined;
   let sandboxLayer: Layer.Layer<SandboxTag>;
   let sandboxRepoDir: string;
 
   if (isTestMode) {
     sandboxLayer = options._test!.buildSandboxLayer!(worktreePath);
     sandboxRepoDir = worktreePath;
+  } else if (options.sandbox) {
+    // Provider mode: delegate to the sandbox provider
+    const env = await Effect.runPromise(
+      resolveEnv(hostRepoDir).pipe(Effect.provide(NodeContext.layer)),
+    );
+
+    const gitPath = join(hostRepoDir, ".git");
+    const gitMounts = await Effect.runPromise(
+      resolveGitVolumeMounts(gitPath).pipe(
+        Effect.provide(NodeFileSystem.layer),
+      ),
+    );
+
+    const mounts = [
+      { hostPath: worktreePath, sandboxPath: SANDBOX_WORKSPACE_DIR },
+      ...gitMounts.map((m) => {
+        const [hostPath, sandboxPath] = m.split(":");
+        return { hostPath: hostPath!, sandboxPath: sandboxPath! };
+      }),
+    ];
+
+    providerHandle = await options.sandbox.create({
+      worktreePath,
+      hostRepoPath: hostRepoDir,
+      mounts,
+      env,
+    });
+
+    sandboxLayer = makeSandboxLayerFromHandle(providerHandle);
+    sandboxRepoDir = providerHandle.workspacePath;
   } else {
     containerName = `sandcastle-${randomUUID()}`;
     const resolvedImageName =
@@ -242,8 +279,10 @@ export const createSandbox = async (
     if (closed) return { preservedWorktreePath: undefined };
     closed = true;
 
-    // Remove container
-    if (containerName) {
+    // Remove container / close provider handle
+    if (providerHandle) {
+      await providerHandle.close();
+    } else if (containerName) {
       await Effect.runPromise(
         removeContainer(containerName).pipe(Effect.orDie),
       );

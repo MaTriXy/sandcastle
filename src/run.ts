@@ -16,6 +16,7 @@ import {
   WorktreeSandboxConfig,
   SANDBOX_WORKSPACE_DIR,
 } from "./SandboxFactory.js";
+import type { SandboxProvider } from "./SandboxProvider.js";
 import { resolveEnv } from "./EnvResolver.js";
 import { generateTempBranchName, getCurrentBranch } from "./WorktreeManager.js";
 import {
@@ -154,6 +155,8 @@ export type WorktreeMode =
 export interface RunOptions {
   /** Agent provider to use (e.g. claudeCode("claude-opus-4-6")) */
   readonly agent: AgentProvider;
+  /** Sandbox provider (e.g. docker()). When omitted, defaults to Docker internally. */
+  readonly sandbox?: SandboxProvider;
   /** Inline prompt string (mutually exclusive with promptFile) */
   readonly prompt?: string;
   /** Path to a prompt file (mutually exclusive with prompt) */
@@ -301,6 +304,7 @@ export const run = async (options: RunOptions): Promise<RunResult> => {
         worktree: worktreeMode,
         copyToSandbox: options.copyToSandbox,
         name: options.name,
+        sandboxProvider: options.sandbox,
       }),
       NodeFileSystem.layer,
       displayLayer,
