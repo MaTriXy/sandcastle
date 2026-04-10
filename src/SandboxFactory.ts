@@ -57,10 +57,12 @@ export class Sandbox extends Context.Tag("Sandbox")<
 >() {}
 
 /**
- * Wrap a Promise-based BindMountSandboxHandle into an Effect-based SandboxService layer.
+ * Wrap a Promise-based sandbox handle into an Effect-based SandboxService layer.
+ * Works with both bind-mount handles (copyIn/copyOut unsupported) and
+ * isolated handles (copyIn/copyOut delegated to the handle).
  */
 export const makeSandboxLayerFromHandle = (
-  handle: BindMountSandboxHandle,
+  handle: BindMountSandboxHandle | IsolatedSandboxHandle,
 ): Layer.Layer<Sandbox> =>
   Layer.succeed(Sandbox, {
     exec: (command, options) =>
@@ -81,61 +83,40 @@ export const makeSandboxLayerFromHandle = (
             message: `exec streaming failed: ${e instanceof Error ? e.message : String(e)}`,
           }),
       }),
-    copyIn: (hostPath, sandboxPath) =>
-      Effect.fail(
-        new CopyError({
-          message: "copyIn is not supported for bind-mount sandbox providers",
-        }),
-      ),
-    copyOut: (sandboxPath, hostPath) =>
-      Effect.fail(
-        new CopyError({
-          message: "copyOut is not supported for bind-mount sandbox providers",
-        }),
-      ),
-  });
-
-/**
- * Wrap a Promise-based IsolatedSandboxHandle into an Effect-based SandboxService layer.
- */
-export const makeSandboxLayerFromIsolatedHandle = (
-  handle: IsolatedSandboxHandle,
-): Layer.Layer<Sandbox> =>
-  Layer.succeed(Sandbox, {
-    exec: (command, options) =>
-      Effect.tryPromise({
-        try: () => handle.exec(command, options),
-        catch: (e) =>
-          new ExecError({
-            command,
-            message: `exec failed: ${e instanceof Error ? e.message : String(e)}`,
-          }),
-      }),
-    execStreaming: (command, onStdoutLine, options) =>
-      Effect.tryPromise({
-        try: () => handle.execStreaming(command, onStdoutLine, options),
-        catch: (e) =>
-          new ExecError({
-            command,
-            message: `exec streaming failed: ${e instanceof Error ? e.message : String(e)}`,
-          }),
-      }),
-    copyIn: (hostPath, sandboxPath) =>
-      Effect.tryPromise({
-        try: () => handle.copyIn(hostPath, sandboxPath),
-        catch: (e) =>
-          new CopyError({
-            message: `copyIn failed: ${e instanceof Error ? e.message : String(e)}`,
-          }),
-      }),
-    copyOut: (sandboxPath, hostPath) =>
-      Effect.tryPromise({
-        try: () => handle.copyOut(sandboxPath, hostPath),
-        catch: (e) =>
-          new CopyError({
-            message: `copyOut failed: ${e instanceof Error ? e.message : String(e)}`,
-          }),
-      }),
+    copyIn:
+      "copyIn" in handle
+        ? (hostPath, sandboxPath) =>
+            Effect.tryPromise({
+              try: () => handle.copyIn(hostPath, sandboxPath),
+              catch: (e) =>
+                new CopyError({
+                  message: `copyIn failed: ${e instanceof Error ? e.message : String(e)}`,
+                }),
+            })
+        : () =>
+            Effect.fail(
+              new CopyError({
+                message:
+                  "copyIn is not supported for bind-mount sandbox providers",
+              }),
+            ),
+    copyOut:
+      "copyOut" in handle
+        ? (sandboxPath, hostPath) =>
+            Effect.tryPromise({
+              try: () => handle.copyOut(sandboxPath, hostPath),
+              catch: (e) =>
+                new CopyError({
+                  message: `copyOut failed: ${e instanceof Error ? e.message : String(e)}`,
+                }),
+            })
+        : () =>
+            Effect.fail(
+              new CopyError({
+                message:
+                  "copyOut is not supported for bind-mount sandbox providers",
+              }),
+            ),
   });
 
 /** The mount point inside the container where the project worktree is bound. */
@@ -305,7 +286,7 @@ const startIsolatedProviderSandbox = (
   }).pipe(
     Effect.map((handle) => ({
       handle,
-      sandboxLayer: makeSandboxLayerFromIsolatedHandle(handle),
+      sandboxLayer: makeSandboxLayerFromHandle(handle),
       workspacePath: handle.workspacePath,
     })),
   );

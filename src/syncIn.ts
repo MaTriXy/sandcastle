@@ -6,32 +6,29 @@
  * clones from the bundle inside the sandbox.
  */
 
-import { execFile } from "node:child_process";
+import { exec } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import type { IsolatedSandboxHandle } from "./SandboxProvider.js";
 
+const execAsync = promisify(exec);
+
 /** Execute a command on the host side, returning stdout. Throws on non-zero exit. */
-const execHost = (command: string, cwd: string): Promise<string> =>
-  new Promise((resolve, reject) => {
-    execFile(
-      "sh",
-      ["-c", command],
-      { cwd, maxBuffer: 10 * 1024 * 1024 },
-      (error, stdout, stderr) => {
-        if (error) {
-          reject(
-            new Error(
-              `Host command failed: ${command}\n${stderr?.toString() || error.message}`,
-            ),
-          );
-        } else {
-          resolve(stdout.toString());
-        }
-      },
-    );
-  });
+const execHost = async (command: string, cwd: string): Promise<string> => {
+  try {
+    const { stdout } = await execAsync(command, {
+      cwd,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    return stdout;
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    throw new Error(`Host command failed: ${command}\n${message}`);
+  }
+};
 
 /** Execute a command in the sandbox, throwing if it fails. */
 const execOk = async (
