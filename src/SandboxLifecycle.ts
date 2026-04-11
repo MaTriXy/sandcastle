@@ -37,7 +37,7 @@ export interface SandboxLifecycleOptions {
   readonly hooks?: SandboxHooks;
   readonly branch?: string;
   /** Host-side path to the worktree directory. Required when sandboxRepoDir
-   *  is a container path that doesn't exist on the host (e.g. /home/agent/workspace). */
+   *  is a sandbox path that doesn't exist on the host (e.g. /home/agent/workspace). */
   readonly hostWorktreePath?: string;
 }
 
