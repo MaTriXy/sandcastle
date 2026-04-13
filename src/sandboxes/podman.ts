@@ -73,18 +73,12 @@ export const podman = (options?: PodmanOptions): SandboxProvider => {
       const hostUid = process.getuid?.() ?? 1000;
       const hostGid = process.getgid?.() ?? 1000;
 
-      // Build environment args
-      const envArgs: string[] = [];
       const env = { ...createOptions.env, HOME: "/home/agent" };
-      for (const [key, value] of Object.entries(env)) {
-        envArgs.push("-e", `${key}=${value}`);
-      }
-
-      // Build volume args
-      const volumeArgs: string[] = [];
-      for (const v of volumeMounts) {
-        volumeArgs.push("-v", v);
-      }
+      const envArgs = Object.entries(env).flatMap(([key, value]) => [
+        "-e",
+        `${key}=${value}`,
+      ]);
+      const volumeArgs = volumeMounts.flatMap((v) => ["-v", v]);
 
       // Start container via podman run
       await new Promise<void>((resolve, reject) => {
