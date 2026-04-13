@@ -13,6 +13,10 @@
     "./sandboxes/docker": {
       "import": "./dist/sandboxes/docker.js",
       "types": "./dist/sandboxes/docker.d.ts"
+    },
+    "./sandboxes/podman": {
+      "import": "./dist/sandboxes/podman.js",
+      "types": "./dist/sandboxes/podman.d.ts"
     }
   },
   "bin": {
