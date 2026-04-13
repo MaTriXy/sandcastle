@@ -195,18 +195,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   const completedIssues = settled
     .map((outcome, i) => ({ outcome, issue: issues[i]! }))
     .filter(
-      (
-        entry,
-      ): entry is {
-        outcome: PromiseFulfilledResult<
-          Awaited<ReturnType<typeof sandcastle.createSandbox>>["run"] extends (
-            ...args: any[]
-          ) => infer R
-            ? Awaited<R>
-            : never
-        >;
-        issue: (typeof issues)[number];
-      } =>
+      (entry) =>
         entry.outcome.status === "fulfilled" &&
         entry.outcome.value.commits.length > 0,
     )
