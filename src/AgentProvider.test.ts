@@ -34,14 +34,6 @@ describe("claudeCode factory", () => {
     expect(command).toContain("--model 'claude-opus-4-6'");
   });
 
-  it("buildInteractiveArgs includes the binary and model", () => {
-    const provider = claudeCode("claude-sonnet-4-6");
-    const args = provider.buildInteractiveArgs("");
-    expect(args[0]).toBe("claude");
-    expect(args).toContain("claude-sonnet-4-6");
-    expect(args).toContain("--model");
-  });
-
   it("parseStreamLine extracts text from assistant message", () => {
     const provider = claudeCode("claude-opus-4-6");
     const line = JSON.stringify({
@@ -114,19 +106,6 @@ describe("claudeCode factory", () => {
     expect(command).not.toContain("--effort");
   });
 
-  it("buildInteractiveArgs includes --effort when specified", () => {
-    const provider = claudeCode("claude-opus-4-6", { effort: "low" });
-    const args = provider.buildInteractiveArgs("");
-    expect(args).toContain("--effort");
-    expect(args).toContain("low");
-  });
-
-  it("buildInteractiveArgs omits --effort when not specified", () => {
-    const provider = claudeCode("claude-opus-4-6");
-    const args = provider.buildInteractiveArgs("");
-    expect(args).not.toContain("--effort");
-  });
-
   it("supports all effort levels", () => {
     for (const effort of ["low", "medium", "high", "max"] as const) {
       const provider = claudeCode("claude-opus-4-6", { effort });
@@ -184,14 +163,6 @@ describe("pi factory", () => {
     const provider = pi("claude-sonnet-4-6");
     const command = provider.buildPrintCommand("do something");
     expect(command).toContain("--model 'claude-sonnet-4-6'");
-  });
-
-  it("buildInteractiveArgs includes the binary and model", () => {
-    const provider = pi("claude-sonnet-4-6");
-    const args = provider.buildInteractiveArgs("");
-    expect(args[0]).toBe("pi");
-    expect(args).toContain("claude-sonnet-4-6");
-    expect(args).toContain("--model");
   });
 
   it("parseStreamLine extracts text from message_update event", () => {
@@ -351,21 +322,6 @@ describe("codex factory", () => {
     expect(command).not.toContain("model_reasoning_effort");
   });
 
-  it("buildInteractiveArgs includes the binary and model", () => {
-    const provider = codex("gpt-5.4-mini");
-    const args = provider.buildInteractiveArgs("");
-    expect(args[0]).toBe("codex");
-    expect(args).toContain("gpt-5.4-mini");
-    expect(args).toContain("--model");
-  });
-
-  it("buildInteractiveArgs includes model reasoning effort config when specified", () => {
-    const provider = codex("gpt-5.4-mini", { effort: "xhigh" });
-    const args = provider.buildInteractiveArgs("");
-    expect(args).toContain("-c");
-    expect(args).toContain('model_reasoning_effort="xhigh"');
-  });
-
   it("supports all codex effort levels", () => {
     for (const effort of ["low", "medium", "high", "xhigh"] as const) {
       const provider = codex("gpt-5.4-mini", { effort });
@@ -374,7 +330,6 @@ describe("codex factory", () => {
       );
     }
   });
-
   it("parseStreamLine extracts text and result from item.completed agent_message", () => {
     const provider = codex("gpt-5.4-mini");
     const line = JSON.stringify({
@@ -516,14 +471,6 @@ describe("opencode factory", () => {
     const provider = opencode("opencode/big-pickle");
     const command = provider.buildPrintCommand("do something");
     expect(command).toContain("--model 'opencode/big-pickle'");
-  });
-
-  it("buildInteractiveArgs includes the binary and model", () => {
-    const provider = opencode("opencode/big-pickle");
-    const args = provider.buildInteractiveArgs("");
-    expect(args[0]).toBe("opencode");
-    expect(args).toContain("opencode/big-pickle");
-    expect(args).toContain("--model");
   });
 
   it("parseStreamLine returns empty array for all input (raw passthrough)", () => {

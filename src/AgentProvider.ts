@@ -67,7 +67,6 @@ export interface AgentProvider {
   /** Environment variables injected by this agent provider. Merged at launch time with env resolver and sandbox provider env. */
   readonly env: Record<string, string>;
   buildPrintCommand(prompt: string): string;
-  buildInteractiveArgs(prompt: string): string[];
   parseStreamLine(line: string): ParsedStreamEvent[];
 }
 
@@ -144,12 +143,6 @@ export const pi = (model: string, options?: PiOptions): AgentProvider => ({
     return `pi -p --mode json --no-session --model ${shellEscape(model)} ${shellEscape(prompt)}`;
   },
 
-  buildInteractiveArgs(prompt: string): string[] {
-    const args = ["pi", "--model", model];
-    if (prompt) args.push(prompt);
-    return args;
-  },
-
   parseStreamLine(line: string): ParsedStreamEvent[] {
     return parsePiStreamLine(line);
   },
@@ -214,15 +207,6 @@ export const codex = (
     return `codex exec --json --dangerously-bypass-approvals-and-sandbox -m ${shellEscape(model)}${effortFlag} ${shellEscape(prompt)}`;
   },
 
-  buildInteractiveArgs(prompt: string): string[] {
-    const args = ["codex", "--model", model];
-    if (options?.effort) {
-      args.push("-c", `model_reasoning_effort="${options.effort}"`);
-    }
-    if (prompt) args.push(prompt);
-    return args;
-  },
-
   parseStreamLine(line: string): ParsedStreamEvent[] {
     return parseCodexStreamLine(line);
   },
@@ -247,12 +231,6 @@ export const opencode = (
 
   buildPrintCommand(prompt: string): string {
     return `opencode run --model ${shellEscape(model)} ${shellEscape(prompt)}`;
-  },
-
-  buildInteractiveArgs(prompt: string): string[] {
-    const args = ["opencode", "--model", model];
-    if (prompt) args.push("-p", prompt);
-    return args;
   },
 
   parseStreamLine(_line: string): ParsedStreamEvent[] {
@@ -280,13 +258,6 @@ export const claudeCode = (
   buildPrintCommand(prompt: string): string {
     const effortFlag = options?.effort ? ` --effort ${options.effort}` : "";
     return `claude --print --verbose --dangerously-skip-permissions --output-format stream-json --model ${shellEscape(model)}${effortFlag} -p ${shellEscape(prompt)}`;
-  },
-
-  buildInteractiveArgs(prompt: string): string[] {
-    const args = ["claude", "--dangerously-skip-permissions", "--model", model];
-    if (options?.effort) args.push("--effort", options.effort);
-    if (prompt) args.push(prompt);
-    return args;
   },
 
   parseStreamLine(line: string): ParsedStreamEvent[] {

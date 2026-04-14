@@ -1,9 +1,8 @@
 import { Command, Options } from "@effect/cli";
 import { FileSystem } from "@effect/platform";
-import { NodeFileSystem } from "@effect/platform-node";
-import { Effect, Layer } from "effect";
+import { Effect } from "effect";
 import * as clack from "@clack/prompts";
-import { execSync, spawn } from "node:child_process";
+import { execSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { styleText } from "node:util";
@@ -18,24 +17,8 @@ import {
   getNextStepsLines,
 } from "./InitService.js";
 import { defaultImageName } from "./sandboxes/docker.js";
-import {
-  claudeCode,
-  codex as codexFactory,
-  opencode as opencodeFactory,
-  pi as piFactory,
-  DEFAULT_MODEL,
-  type AgentProvider,
-} from "./AgentProvider.js";
 import type { AgentEntry } from "./InitService.js";
-import { AgentError, ConfigDirError, InitError } from "./errors.js";
-import {
-  SandboxFactory,
-  WorktreeDockerSandboxFactory,
-  SandboxConfig,
-} from "./SandboxFactory.js";
-import { withSandboxLifecycle } from "./SandboxLifecycle.js";
-import { resolveEnv } from "./EnvResolver.js";
-import { docker } from "./sandboxes/docker.js";
+import { ConfigDirError, InitError } from "./errors.js";
 
 const require = createRequire(import.meta.url);
 const VERSION = (require("../package.json") as { version: string }).version;
@@ -316,159 +299,6 @@ const removeImageCommand = Command.make(
     }),
 );
 
-// --- Interactive command ---
-
-/** CLI-internal registry mapping agent names to factory + default model */
-const AGENT_REGISTRY: Record<
-  string,
-  { factory: (model: string) => AgentProvider; defaultModel: string }
-> = {
-  "claude-code": { factory: claudeCode, defaultModel: DEFAULT_MODEL },
-  pi: { factory: piFactory, defaultModel: "claude-sonnet-4-6" },
-  codex: { factory: codexFactory, defaultModel: "gpt-5.4-mini" },
-  opencode: { factory: opencodeFactory, defaultModel: "opencode/big-pickle" },
-};
-
-const interactiveAgentOption = Options.text("agent").pipe(
-  Options.withDescription(
-    `Agent provider to use (${Object.keys(AGENT_REGISTRY).join(", ")})`,
-  ),
-  Options.withDefault("claude-code"),
-);
-
-const modelOption = Options.text("model").pipe(
-  Options.withDescription(
-    "Model to use for the agent (e.g. claude-sonnet-4-6)",
-  ),
-  Options.optional,
-);
-
-const interactiveSession = (options: {
-  hostRepoDir: string;
-  provider: AgentProvider;
-}): Effect.Effect<
-  void,
-  import("./errors.js").SandboxError,
-  SandboxFactory | Display
-> =>
-  Effect.gen(function* () {
-    const { hostRepoDir, provider } = options;
-    const factory = yield* SandboxFactory;
-    const d = yield* Display;
-
-    yield* factory.withSandbox(({ hostWorktreePath, sandboxWorkspacePath }) =>
-      withSandboxLifecycle(
-        { hostRepoDir, sandboxRepoDir: sandboxWorkspacePath, hostWorktreePath },
-        (ctx) =>
-          Effect.gen(function* () {
-            // Get sandbox ID for interactive session
-            const hostnameResult = yield* ctx.sandbox.exec("hostname");
-            const containerId = hostnameResult.stdout.trim();
-
-            yield* d.status(
-              `Launching interactive ${provider.name} session...`,
-              "info",
-            );
-
-            const exitCode = yield* Effect.async<number, AgentError>(
-              (resume) => {
-                const proc = spawn(
-                  "docker",
-                  [
-                    "exec",
-                    "-it",
-                    "-w",
-                    ctx.sandboxRepoDir,
-                    containerId,
-                    ...provider.buildInteractiveArgs(""),
-                  ],
-                  { stdio: "inherit" },
-                );
-
-                proc.on("error", (error) => {
-                  resume(
-                    Effect.fail(
-                      new AgentError({
-                        message: `Failed to launch ${provider.name}: ${error.message}`,
-                      }),
-                    ),
-                  );
-                });
-
-                proc.on("close", (code) => {
-                  resume(Effect.succeed(code ?? 0));
-                });
-              },
-            );
-
-            yield* d.status(
-              `Session ended (exit code ${exitCode}). Syncing changes back...`,
-              "info",
-            );
-          }),
-      ),
-    );
-  });
-
-const interactiveCommand = Command.make(
-  "interactive",
-  {
-    imageName: imageNameOption,
-    agent: interactiveAgentOption,
-    model: modelOption,
-  },
-  ({ imageName: imageNameFlag, agent: agentName, model }) =>
-    Effect.gen(function* () {
-      const hostRepoDir = process.cwd();
-      yield* requireConfigDir(hostRepoDir);
-
-      const imageName = resolveImageName(imageNameFlag, hostRepoDir);
-
-      // Resolve agent provider from registry
-      const entry = AGENT_REGISTRY[agentName];
-      if (!entry) {
-        const available = Object.keys(AGENT_REGISTRY).join(", ");
-        yield* Effect.fail(
-          new AgentError({
-            message: `Unknown agent "${agentName}". Available: ${available}`,
-          }),
-        );
-        return; // unreachable, satisfies TypeScript
-      }
-      const resolvedModel =
-        model._tag === "Some" ? model.value : entry.defaultModel;
-      const provider = entry.factory(resolvedModel);
-
-      // Resolve env vars
-      const env = yield* resolveEnv(hostRepoDir);
-
-      const d = yield* Display;
-      yield* d.summary("Sandcastle Interactive", {
-        Image: imageName,
-        Agent: provider.name,
-        Model: resolvedModel,
-      });
-
-      const factoryLayer = Layer.provide(
-        WorktreeDockerSandboxFactory.layer,
-        Layer.merge(
-          Layer.succeed(SandboxConfig, {
-            env,
-            hostRepoDir,
-            sandboxProvider: docker({ imageName }),
-            branchStrategy: { type: "head" },
-          }),
-          NodeFileSystem.layer,
-        ),
-      );
-
-      yield* interactiveSession({
-        hostRepoDir,
-        provider,
-      }).pipe(Effect.provide(factoryLayer));
-    }),
-);
-
 // --- Docker namespace command ---
 
 const dockerCommand = Command.make("docker", {}, () =>
@@ -492,7 +322,7 @@ const rootCommand = Command.make("sandcastle", {}, () =>
 );
 
 export const sandcastle = rootCommand.pipe(
-  Command.withSubcommands([initCommand, dockerCommand, interactiveCommand]),
+  Command.withSubcommands([initCommand, dockerCommand]),
 );
 
 export const cli = Command.run(sandcastle, {
