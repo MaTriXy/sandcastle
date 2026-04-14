@@ -24,13 +24,15 @@ import {
   Sandbox as SandboxTag,
   SandboxFactory,
   SANDBOX_WORKSPACE_DIR,
-  makeSandboxLayerFromHandle,
   resolveGitMounts,
 } from "./SandboxFactory.js";
 import type {
   SandboxProvider,
   BindMountSandboxHandle,
+  IsolatedSandboxHandle,
 } from "./SandboxProvider.js";
+import { startSandbox } from "./startSandbox.js";
+import { syncOut } from "./syncOut.js";
 import * as WorktreeManager from "./WorktreeManager.js";
 import { copyToSandbox } from "./CopyToSandbox.js";
 
@@ -140,23 +142,31 @@ export const createSandbox = async (
 
   const worktreePath = worktreeInfo.path;
 
-  // 2. Copy files if requested
-  if (options.copyToSandbox && options.copyToSandbox.length > 0) {
+  // 2. Copy files if requested (bind-mount only; isolated providers handle this in startSandbox)
+  if (
+    options.copyToSandbox &&
+    options.copyToSandbox.length > 0 &&
+    options.sandbox.tag !== "isolated"
+  ) {
     await Effect.runPromise(
       copyToSandbox(options.copyToSandbox, hostRepoDir, worktreePath),
     );
   }
 
   // 3. Start sandbox via provider or local sandbox layer (test mode)
-  let providerHandle: BindMountSandboxHandle | undefined;
+  let providerHandle:
+    | BindMountSandboxHandle
+    | IsolatedSandboxHandle
+    | undefined;
   let sandboxLayer: Layer.Layer<SandboxTag>;
   let sandboxRepoDir: string;
+  const isIsolated = options.sandbox.tag === "isolated";
 
   if (isTestMode) {
     sandboxLayer = options._test!.buildSandboxLayer!(worktreePath);
     sandboxRepoDir = worktreePath;
   } else {
-    // Provider mode: delegate to the sandbox provider
+    // Provider mode: delegate to the shared startSandbox helper
     const resolvedEnv = await Effect.runPromise(
       resolveEnv(hostRepoDir).pipe(Effect.provide(NodeContext.layer)),
     );
@@ -166,25 +176,34 @@ export const createSandbox = async (
       sandboxProviderEnv: options.sandbox.env,
     });
 
-    const gitPath = join(hostRepoDir, ".git");
-    const gitMounts = await Effect.runPromise(
-      resolveGitMounts(gitPath).pipe(Effect.provide(NodeFileSystem.layer)),
+    const provider = options.sandbox;
+    const startResult = await Effect.runPromise(
+      provider.tag === "isolated"
+        ? startSandbox({
+            provider,
+            hostRepoDir: worktreePath,
+            env,
+            copyPaths: options.copyToSandbox,
+          })
+        : resolveGitMounts(join(hostRepoDir, ".git")).pipe(
+            Effect.provide(NodeFileSystem.layer),
+            Effect.catchAll(() => Effect.succeed([])),
+            Effect.flatMap((gitMounts) =>
+              startSandbox({
+                provider,
+                hostRepoDir,
+                env,
+                worktreeOrRepoPath: worktreePath,
+                gitMounts,
+                workspaceDir: SANDBOX_WORKSPACE_DIR,
+              }),
+            ),
+          ),
     );
 
-    const mounts = [
-      { hostPath: worktreePath, sandboxPath: SANDBOX_WORKSPACE_DIR },
-      ...gitMounts,
-    ];
-
-    providerHandle = await options.sandbox.create({
-      worktreePath,
-      hostRepoPath: hostRepoDir,
-      mounts,
-      env,
-    });
-
-    sandboxLayer = makeSandboxLayerFromHandle(providerHandle);
-    sandboxRepoDir = providerHandle.workspacePath;
+    providerHandle = startResult.handle;
+    sandboxLayer = startResult.sandboxLayer;
+    sandboxRepoDir = startResult.workspacePath;
   }
 
   // 4. Run onSandboxReady hooks
@@ -329,12 +348,17 @@ export const createSandbox = async (
           : silentDisplayLayer;
 
       // Build a SandboxFactory that reuses the existing sandbox
+      const applyToHost =
+        isIsolated && providerHandle
+          ? () => syncOut(worktreePath, providerHandle as IsolatedSandboxHandle)
+          : () => Effect.void;
+
       const reuseFactoryLayer = Layer.succeed(SandboxFactory, {
         withSandbox: (makeEffect) =>
           makeEffect({
             hostWorktreePath: worktreePath,
             sandboxWorkspacePath: sandboxRepoDir,
-            applyToHost: () => Effect.void,
+            applyToHost,
           }).pipe(
             Effect.provide(sandboxLayer),
             Effect.map((value) => ({

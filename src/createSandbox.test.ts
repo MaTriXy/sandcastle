@@ -9,7 +9,11 @@ import { describe, expect, it } from "vitest";
 import { claudeCode, pi } from "./AgentProvider.js";
 import { createSandbox } from "./createSandbox.js";
 import { Sandbox } from "./SandboxFactory.js";
-import { createBindMountSandboxProvider } from "./SandboxProvider.js";
+import {
+  createBindMountSandboxProvider,
+  createIsolatedSandboxProvider,
+} from "./SandboxProvider.js";
+import { testIsolated } from "./sandboxes/test-isolated.js";
 import { makeLocalSandboxLayer } from "./testSandbox.js";
 
 /** Dummy sandbox provider used to satisfy the required `sandbox` field in test mode. */
@@ -133,6 +137,46 @@ const makeMockAgentLayer = (
       Effect.flatMap(Sandbox, (real) =>
         real.copyFileOut(sandboxPath, hostPath),
       ).pipe(Effect.provide(fsLayer)),
+  });
+};
+
+/**
+ * Create a mock isolated sandbox provider that intercepts agent commands.
+ * Uses testIsolated() as a base and wraps exec to intercept claude/pi commands.
+ */
+const makeMockIsolatedProvider = (
+  mockAgentBehavior: (cwd: string) => Promise<string> = async () =>
+    "mock output",
+) => {
+  const base = testIsolated();
+  return createIsolatedSandboxProvider({
+    name: "mock-isolated",
+    create: async (opts) => {
+      const handle = await base.create(opts);
+      return {
+        ...handle,
+        exec: async (command: string, options?: any) => {
+          const agent = AGENT_PREFIXES.find((a) =>
+            command.startsWith(a.prefix),
+          );
+          if (agent && options?.onLine) {
+            const cwd = options?.cwd ?? handle.workspacePath;
+            const output = await mockAgentBehavior(cwd);
+            const streamOutput = agent.toStream(output);
+            for (const line of streamOutput.split("\n")) {
+              options.onLine(line);
+            }
+            return { stdout: streamOutput, stderr: "", exitCode: 0 };
+          }
+          if (agent) {
+            const cwd = options?.cwd ?? handle.workspacePath;
+            const output = await mockAgentBehavior(cwd);
+            return { stdout: output, stderr: "", exitCode: 0 };
+          }
+          return handle.exec(command, options);
+        },
+      };
+    },
   });
 };
 
@@ -669,6 +713,130 @@ describe("createSandbox", () => {
         prompt: "verify file",
         maxIterations: 1,
       });
+    } finally {
+      await sandbox.close();
+      await rm(hostDir, { recursive: true, force: true });
+    }
+  });
+
+  it("works with isolated sandbox providers", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "sandbox-test-"));
+    await initRepo(hostDir);
+    await commitFile(hostDir, "init.txt", "init", "initial commit");
+
+    const provider = testIsolated();
+    const sandbox = await createSandbox({
+      branch: "test-isolated-branch",
+      sandbox: provider,
+      _test: { hostRepoDir: hostDir },
+    });
+
+    try {
+      expect(sandbox.branch).toBe("test-isolated-branch");
+      expect(sandbox.worktreePath).toContain(".sandcastle/worktrees");
+      expect(existsSync(sandbox.worktreePath)).toBe(true);
+    } finally {
+      await sandbox.close();
+      await rm(hostDir, { recursive: true, force: true });
+    }
+  });
+
+  it("isolated provider: run() syncs commits to host worktree", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "sandbox-test-"));
+    await initRepo(hostDir);
+    await commitFile(hostDir, "init.txt", "init", "initial commit");
+
+    const provider = makeMockIsolatedProvider();
+    const sandbox = await createSandbox({
+      branch: "test-isolated-commits",
+      sandbox: provider,
+      _test: { hostRepoDir: hostDir },
+    });
+
+    try {
+      const result = await sandbox.run({
+        agent: testProvider,
+        prompt: "create a file",
+        maxIterations: 1,
+      });
+
+      expect(result.iterationsRun).toBe(1);
+
+      // Verify the worktree exists and is on the right branch
+      const { stdout: branch } = await execAsync(
+        "git rev-parse --abbrev-ref HEAD",
+        { cwd: sandbox.worktreePath },
+      );
+      expect(branch.trim()).toBe("test-isolated-commits");
+    } finally {
+      await sandbox.close();
+      await rm(hostDir, { recursive: true, force: true });
+    }
+  });
+
+  it("isolated provider: close() cleans up properly", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "sandbox-test-"));
+    await initRepo(hostDir);
+    await commitFile(hostDir, "init.txt", "init", "initial commit");
+
+    const provider = testIsolated();
+    const sandbox = await createSandbox({
+      branch: "test-isolated-close",
+      sandbox: provider,
+      _test: { hostRepoDir: hostDir },
+    });
+
+    const worktreePath = sandbox.worktreePath;
+    const closeResult = await sandbox.close();
+
+    expect(closeResult.preservedWorktreePath).toBeUndefined();
+    expect(existsSync(worktreePath)).toBe(false);
+    await rm(hostDir, { recursive: true, force: true });
+  });
+
+  it("isolated provider: sequential runs with commits sync correctly", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "sandbox-test-"));
+    await initRepo(hostDir);
+    await commitFile(hostDir, "init.txt", "init", "initial commit");
+
+    let runCount = 0;
+    const provider = makeMockIsolatedProvider(async (cwd) => {
+      runCount++;
+      const fname = `isolated-file-${runCount}.txt`;
+      await writeFile(join(cwd, fname), `content ${runCount}`);
+      await execAsync(`git add ${fname}`, { cwd });
+      await execAsync(`git commit -m "isolated commit ${runCount}"`, { cwd });
+      return `done run ${runCount}`;
+    });
+
+    const sandbox = await createSandbox({
+      branch: "test-isolated-multi-run",
+      sandbox: provider,
+      _test: { hostRepoDir: hostDir },
+    });
+
+    try {
+      const result1 = await sandbox.run({
+        agent: testProvider,
+        prompt: "first run",
+        maxIterations: 1,
+      });
+      expect(result1.commits.length).toBeGreaterThanOrEqual(1);
+
+      const result2 = await sandbox.run({
+        agent: testProvider,
+        prompt: "second run",
+        maxIterations: 1,
+      });
+      expect(result2.commits.length).toBeGreaterThanOrEqual(1);
+
+      // Verify both commits exist on the host worktree branch
+      const { stdout: log } = await execAsync(
+        `git log --oneline test-isolated-multi-run`,
+        { cwd: hostDir },
+      );
+      expect(log).toContain("isolated commit 1");
+      expect(log).toContain("isolated commit 2");
     } finally {
       await sandbox.close();
       await rm(hostDir, { recursive: true, force: true });
