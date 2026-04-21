@@ -215,19 +215,20 @@ export const orchestrate = (
             },
             (ctx) =>
               Effect.gen(function* () {
+                // Shared sandbox session infrastructure for resume + capture
+                const sandboxProjectsDir = join(
+                  "/home/agent",
+                  ".claude",
+                  "projects",
+                );
+
                 // Resume session: transfer JSONL from host to sandbox before iteration 1
                 const iterationResumeSession =
                   i === 1 ? options.resumeSession : undefined;
                 if (iterationResumeSession && bindMountHandle) {
                   yield* display.status(label("Resuming session"), "info");
-                  const sandboxCwd = ctx.sandboxRepoDir;
-                  const sandboxProjectsDir = join(
-                    "/home/agent",
-                    ".claude",
-                    "projects",
-                  );
                   const sbStore = sandboxSessionStore(
-                    sandboxCwd,
+                    ctx.sandboxRepoDir,
                     bindMountHandle,
                     sandboxProjectsDir,
                   );
@@ -296,14 +297,8 @@ export const orchestrate = (
                 let sessionFilePath: string | undefined;
                 if (provider.captureSessions && sessionId && bindMountHandle) {
                   yield* display.status(label("Capturing session"), "info");
-                  const sandboxCwd = ctx.sandboxRepoDir;
-                  const sandboxProjectsDir = join(
-                    "/home/agent",
-                    ".claude",
-                    "projects",
-                  );
                   const sbStore = sandboxSessionStore(
-                    sandboxCwd,
+                    ctx.sandboxRepoDir,
                     bindMountHandle,
                     sandboxProjectsDir,
                   );
