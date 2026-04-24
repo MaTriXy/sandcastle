@@ -194,11 +194,22 @@ export const create = (
           }),
         );
       }
-      yield* execGit([...NO_CONFIG_LOCK_FLAGS, "worktree", "add", worktreePath, branch], repoDir).pipe(
+      yield* execGit(
+        [...NO_CONFIG_LOCK_FLAGS, "worktree", "add", worktreePath, branch],
+        repoDir,
+      ).pipe(
         Effect.catchAll((e) => {
           if (e.message.includes("invalid reference")) {
             return execGit(
-              [...NO_CONFIG_LOCK_FLAGS, "worktree", "add", "-b", branch, worktreePath, opts?.baseBranch ?? "HEAD"],
+              [
+                ...NO_CONFIG_LOCK_FLAGS,
+                "worktree",
+                "add",
+                "-b",
+                branch,
+                worktreePath,
+                opts?.baseBranch ?? "HEAD",
+              ],
               repoDir,
             );
           }
@@ -207,7 +218,15 @@ export const create = (
       );
     } else {
       yield* execGit(
-        [...NO_CONFIG_LOCK_FLAGS, "worktree", "add", "-b", branch, worktreePath, "HEAD"],
+        [
+          ...NO_CONFIG_LOCK_FLAGS,
+          "worktree",
+          "add",
+          "-b",
+          branch,
+          worktreePath,
+          "HEAD",
+        ],
         repoDir,
       ).pipe(
         Effect.catchAll((e) => {

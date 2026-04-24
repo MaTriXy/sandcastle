@@ -336,7 +336,9 @@ describe("WorktreeManager.create", () => {
     const repoDir = await setupRepo();
 
     // Enable the config that triggers .git/config writes during branch creation
-    await execAsync("git config branch.autoSetupMerge always", { cwd: repoDir });
+    await execAsync("git config branch.autoSetupMerge always", {
+      cwd: repoDir,
+    });
 
     const { path, branch } = await run(
       create(repoDir, { branch: "sandcastle/no-tracking-test" }),
@@ -357,7 +359,9 @@ describe("WorktreeManager.create", () => {
     const repoDir = await setupRepo();
 
     // Enable the config that triggers .git/config writes during branch creation
-    await execAsync("git config branch.autoSetupMerge always", { cwd: repoDir });
+    await execAsync("git config branch.autoSetupMerge always", {
+      cwd: repoDir,
+    });
 
     const { path, branch } = await run(create(repoDir));
 
