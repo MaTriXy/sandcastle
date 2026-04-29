@@ -29,17 +29,17 @@ export const copyToWorktree = (
   worktreePath: string,
 ): Effect.Effect<void, CopyToWorktreeTimeoutError | CopyToWorktreeError> =>
   Effect.gen(function* () {
+    const cowFlags = getCopyOnWriteFlags(process.platform);
     for (const relativePath of paths) {
       const src = join(hostRepoDir, relativePath);
       if (!existsSync(src)) {
         continue;
       }
       const dest = join(worktreePath, relativePath);
-      const cowFlags = getCopyOnWriteFlags(process.platform);
       yield* Effect.async<void, CopyToWorktreeError>((resume) => {
         execFile("cp", [...cowFlags, src, dest], (error) => {
           if (error) {
-            // Fall back to a regular copy if reflink is not supported
+            // Fall back to a regular copy if copy-on-write is not supported
             execFile("cp", ["-R", src, dest], (fallbackError, _, stderr) => {
               if (fallbackError) {
                 resume(
