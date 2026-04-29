@@ -318,6 +318,10 @@ export const WorktreeDockerSandboxFactory = {
       const isHeadMode = branchStrategy.type === "head";
       const branch =
         branchStrategy.type === "branch" ? branchStrategy.branch : undefined;
+      const baseBranch =
+        branchStrategy.type === "branch"
+          ? branchStrategy.baseBranch
+          : undefined;
       const fileSystem = yield* FileSystem.FileSystem;
       const display = yield* Display;
 
@@ -334,7 +338,7 @@ export const WorktreeDockerSandboxFactory = {
           ),
           Effect.andThen(
             branch
-              ? WorktreeManager.create(hostRepoDir, { branch })
+              ? WorktreeManager.create(hostRepoDir, { branch, baseBranch })
               : WorktreeManager.create(hostRepoDir, { name }),
           ),
           Effect.provideService(FileSystem.FileSystem, fileSystem),
